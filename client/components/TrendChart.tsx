@@ -1,6 +1,6 @@
 import React from "react";
 import { View, StyleSheet, Dimensions } from "react-native";
-import Svg, { Path, Line, Text as SvgText } from "react-native-svg";
+import Svg, { Path, Line, Text as SvgText, Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 
 import { ThemedText } from "@/components/ThemedText";
 import { Card } from "@/components/Card";
@@ -56,10 +56,24 @@ export function TrendChart({ readings }: TrendChartProps) {
     { value: yMin, y: padding.top + chartHeight },
   ];
 
+  const areaPath = pathData + 
+    ` L ${getX(recentReadings.length - 1)} ${padding.top + chartHeight}` +
+    ` L ${getX(0)} ${padding.top + chartHeight} Z`;
+
+  const lastX = getX(recentReadings.length - 1);
+  const lastY = getY(lastReading.co2);
+
   return (
     <Card style={styles.container}>
       <ThemedText style={styles.title}>30-Minute Trend</ThemedText>
       <Svg width={width} height={height}>
+        <Defs>
+          <LinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={lineColor} stopOpacity="0.25" />
+            <Stop offset="1" stopColor={lineColor} stopOpacity="0.02" />
+          </LinearGradient>
+        </Defs>
+
         {yAxisLabels.map((label, index) => (
           <React.Fragment key={index}>
             <Line
@@ -84,13 +98,21 @@ export function TrendChart({ readings }: TrendChartProps) {
         ))}
 
         <Path
+          d={areaPath}
+          fill="url(#areaGrad)"
+        />
+
+        <Path
           d={pathData}
           stroke={lineColor}
-          strokeWidth={2}
+          strokeWidth={2.5}
           fill="none"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+
+        <Circle cx={lastX} cy={lastY} r={5} fill={lineColor} />
+        <Circle cx={lastX} cy={lastY} r={2.5} fill="#fff" />
 
         <SvgText
           x={padding.left}
