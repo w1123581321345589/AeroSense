@@ -1,6 +1,12 @@
 import { Platform } from "react-native";
 
 export const Colors = {
+  co2: {
+    good: "#34C759",
+    advisory: "#FFD60A", 
+    warning: "#FF9500",
+    critical: "#FF3B30",
+  },
   light: {
     text: "#11181C",
     textSecondary: "#687076",
