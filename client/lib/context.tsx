@@ -21,6 +21,7 @@ import {
   generateMockReading,
   createNewSession,
 } from "./storage";
+import { sendCO2Alert, requestNotificationPermissions } from "./notifications";
 import * as Haptics from "expo-haptics";
 
 interface AppContextType {
@@ -144,19 +145,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const checkForAlerts = (reading: AirQualityReading) => {
+  const checkForAlerts = async (reading: AirQualityReading) => {
     const level = getAlertLevel(reading.co2);
     if (level === "critical" || level === "warning") {
       const existingAlert = activeAlerts.find(a => a.level === level && !a.acknowledged);
       if (!existingAlert) {
+        const action = level === "critical"
+          ? "Open overhead vent fully and direct airflow toward your face."
+          : "Consider opening your air vent for better circulation.";
+          
         const newAlert: AirQualityAlert = {
           id: `alert_${Date.now()}`,
           level,
           headline: level === "critical" ? "High CO2 Detected" : "Elevated CO2 Levels",
           metric: `${reading.co2} ppm`,
-          action: level === "critical"
-            ? "Open overhead vent fully and direct airflow toward your face."
-            : "Consider opening your air vent for better circulation.",
+          action,
           evidence: level === "critical"
             ? "Studies show cognitive performance decreases above 2500 ppm"
             : null,
@@ -172,6 +175,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               : Haptics.NotificationFeedbackType.Warning
           );
         }
+        
+        await sendCO2Alert(level, reading.co2, action);
       }
     }
   };
