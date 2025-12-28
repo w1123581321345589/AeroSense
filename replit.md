@@ -93,6 +93,14 @@ Preferred communication style: Simple, everyday language.
 - Fixed `connectDevice` to reset `isScanning` state on connection
 - Fixed TypeScript style array issue in `FlightPhasePill` component
 - All hydration and phase updates now properly persist via `saveCurrentSession`
+- Added GitHub integration for syncing code to repository
+- Created comprehensive README.md for GitHub repository
+
+### GitHub Integration
+- Repository: https://github.com/w1123581321345589/AeroSense
+- Sync endpoint: POST `/api/github/sync-files` with `{repoName, commitMessage}`
+- User endpoint: GET `/api/github/user`
+- Uses Replit's GitHub connector for authentication
 
 ### Planned Integrations (from specifications)
 - **CoreBluetooth/BLE:** Connection to CO2 monitors (Aranet4, INKBIRD IAM-T1, Qingping)
