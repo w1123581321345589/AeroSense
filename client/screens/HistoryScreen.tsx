@@ -65,7 +65,7 @@ export default function HistoryScreen() {
 
     return (
       <Pressable
-        onPress={() => navigation.navigate("SessionDetail", { sessionId: item.id })}
+        onPress={() => navigation.navigate("SessionSummary", { sessionId: item.id })}
         style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}
       >
         <Card style={styles.sessionCard}>
