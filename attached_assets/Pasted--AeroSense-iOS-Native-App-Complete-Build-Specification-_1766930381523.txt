@@ -1,6 +1,6 @@
 # AeroSense iOS Native App: Complete Build Specification
 
-## Replit/Xcode Build Prompt
+## Xcode Build Prompt
 
 You are building **AeroSense**, a native iOS app that connects to portable CO2 monitors via Bluetooth Low Energy (BLE) and provides aviation-specific air quality intelligence. This is not a simulator—it reads real sensor data from devices passengers already own.
 
