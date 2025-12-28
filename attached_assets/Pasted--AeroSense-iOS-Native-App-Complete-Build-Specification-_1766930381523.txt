@@ -1,0 +1,1092 @@
+# AeroSense iOS Native App: Complete Build Specification
+
+## Replit/Xcode Build Prompt
+
+You are building **AeroSense**, a native iOS app that connects to portable CO2 monitors via Bluetooth Low Energy (BLE) and provides aviation-specific air quality intelligence. This is not a simulator—it reads real sensor data from devices passengers already own.
+
+-----
+
+## Executive Summary
+
+**What it does:** Connects to Aranet4, INKBIRD IAM-T1, Qingping, and other BLE-enabled CO2 monitors. Displays real-time readings with flight-phase context, evidence-based alerts, and actionable recommendations to combat cabin air quality issues.
+
+**Why it matters:** Research shows cabin CO2 reaches 2500-4000 ppm during boarding/taxi (Harvard found pilots are 69% less likely to pass maneuvers at 2500 ppm). No existing CO2 app provides aviation-specific context. AeroSense fills that gap.
+
+**Business model:** Freemium app. Free tier shows readings; Premium ($4.99/month) unlocks flight intelligence, history export, and multi-device support.
+
+**Target launch:** 8-12 weeks for MVP supporting Aranet4 + 1-2 additional devices.
+
+-----
+
+## Technical Architecture
+
+### Platform Requirements
+
+- iOS 15.0+ (for latest CoreBluetooth APIs)
+- Swift 5.9+
+- SwiftUI for UI layer
+- CoreBluetooth for BLE
+- BackgroundTasks for background monitoring
+- UserNotifications with Critical Alerts entitlement (apply to Apple)
+
+### Project Structure
+
+```
+AeroSense/
+├── App/
+│   ├── AeroSenseApp.swift
+│   ├── AppDelegate.swift (for background BLE)
+│   └── ContentView.swift
+├── Models/
+│   ├── AirQualityReading.swift
+│   ├── FlightSession.swift
+│   ├── SupportedDevice.swift
+│   └── Alert.swift
+├── Services/
+│   ├── BluetoothManager.swift
+│   ├── DeviceProtocols/
+│   │   ├── Aranet4Protocol.swift
+│   │   ├── InkbirdProtocol.swift
+│   │   └── QingpingProtocol.swift
+│   ├── FlightPhaseDetector.swift
+│   ├── AlertEngine.swift
+│   └── HealthStore.swift (optional HealthKit)
+├── Views/
+│   ├── Onboarding/
+│   │   ├── DeviceScanView.swift
+│   │   └── DevicePairingView.swift
+│   ├── PreFlight/
+│   │   └── PreFlightChecklistView.swift
+│   ├── Monitoring/
+│   │   ├── DashboardView.swift
+│   │   ├── GaugeView.swift
+│   │   ├── AlertCardView.swift
+│   │   ├── TrendChartView.swift
+│   │   └── HydrationTrackerView.swift
+│   ├── Summary/
+│   │   └── FlightSummaryView.swift
+│   └── Settings/
+│       ├── SettingsView.swift
+│       └── DeviceManagementView.swift
+├── Utilities/
+│   ├── Constants.swift
+│   ├── Extensions.swift
+│   └── Haptics.swift
+└── Resources/
+    ├── Assets.xcassets
+    └── Localizable.strings
+```
+
+-----
+
+## BLE Device Protocols
+
+### Primary Target: Aranet4
+
+The Aranet4 uses a well-documented BLE protocol (reverse-engineered by community). No official SDK exists, but third-party integration is permitted when users enable “Smart Home integrations” in device settings.
+
+#### Aranet4 BLE Specification
+
+```swift
+// MARK: - Aranet4 Protocol Constants
+
+struct Aranet4Protocol {
+    
+    // Service UUIDs
+    static let genericAccessService = CBUUID(string: "00001800-0000-1000-8000-00805f9b34fb")
+    static let deviceInfoService = CBUUID(string: "0000180a-0000-1000-8000-00805f9b34fb")
+    static let aranetService = CBUUID(string: "f0cd1400-95da-4f4b-9ac8-aa55d312af0c")
+    
+    // Characteristic UUIDs (Aranet Service)
+    static let currentReadingsChar = CBUUID(string: "f0cd1503-95da-4f4b-9ac8-aa55d312af0c")
+    static let intervalChar = CBUUID(string: "f0cd1504-95da-4f4b-9ac8-aa55d312af0c")
+    static let secondsSinceUpdateChar = CBUUID(string: "f0cd1505-95da-4f4b-9ac8-aa55d312af0c")
+    static let totalReadingsChar = CBUUID(string: "f0cd1506-95da-4f4b-9ac8-aa55d312af0c")
+    static let historyChar = CBUUID(string: "f0cd1508-95da-4f4b-9ac8-aa55d312af0c") // Requires PIN
+    static let commandChar = CBUUID(string: "f0cd1509-95da-4f4b-9ac8-aa55d312af0c")
+    
+    // Advertisement Data (for passive scanning without connection)
+    // Aranet4 broadcasts current readings in manufacturer data when Smart Home enabled
+    static let manufacturerID: UInt16 = 0x0702 // Aranet manufacturer ID
+    
+    /// Parse current readings from characteristic value
+    /// Data format: [CO2_L, CO2_H, Temp_L, Temp_H, Pressure_L, Pressure_H, Humidity, Battery, Status]
+    static func parseCurrentReadings(_ data: Data) -> AirQualityReading? {
+        guard data.count >= 9 else { return nil }
+        
+        let co2 = Int(data[0]) | (Int(data[1]) << 8)
+        let tempRaw = Int(data[2]) | (Int(data[3]) << 8)
+        let temperature = Double(tempRaw) / 20.0 // Celsius
+        let pressureRaw = Int(data[4]) | (Int(data[5]) << 8)
+        let pressure = Double(pressureRaw) / 10.0 // hPa
+        let humidity = Int(data[6])
+        let battery = Int(data[7])
+        let status = data[8]
+        
+        return AirQualityReading(
+            co2: co2,
+            temperature: temperature,
+            humidity: humidity,
+            pressure: pressure,
+            battery: battery,
+            timestamp: Date(),
+            source: .aranet4
+        )
+    }
+    
+    /// Parse advertisement data (no connection required)
+    /// When Smart Home Integration enabled, Aranet4 broadcasts readings
+    static func parseAdvertisement(_ manufacturerData: Data) -> AirQualityReading? {
+        // Manufacturer data format varies by firmware version
+        // Common format: [ID_L, ID_H, ..., CO2_L, CO2_H, Temp, Hum, ...]
+        guard manufacturerData.count >= 8 else { return nil }
+        
+        // Skip manufacturer ID bytes, parse sensor data
+        let offset = 2
+        guard manufacturerData.count >= offset + 6 else { return nil }
+        
+        let co2 = Int(manufacturerData[offset]) | (Int(manufacturerData[offset + 1]) << 8)
+        let tempRaw = Int(manufacturerData[offset + 2]) | (Int(manufacturerData[offset + 3]) << 8)
+        let temperature = Double(tempRaw) / 20.0
+        let humidity = Int(manufacturerData[offset + 4])
+        let battery = Int(manufacturerData[offset + 5])
+        
+        // Validate reasonable ranges
+        guard co2 > 0 && co2 < 10000,
+              humidity >= 0 && humidity <= 100 else {
+            return nil
+        }
+        
+        return AirQualityReading(
+            co2: co2,
+            temperature: temperature,
+            humidity: humidity,
+            pressure: nil,
+            battery: battery,
+            timestamp: Date(),
+            source: .aranet4
+        )
+    }
+}
+```
+
+#### Aranet4 Connection Manager
+
+```swift
+// MARK: - Aranet4 Connection Manager
+
+import CoreBluetooth
+
+class BluetoothManager: NSObject, ObservableObject {
+    
+    enum ConnectionState {
+        case disconnected
+        case scanning
+        case connecting
+        case connected
+        case bluetoothOff
+        case unauthorized
+    }
+    
+    @Published var connectionState: ConnectionState = .disconnected
+    @Published var currentReading: AirQualityReading?
+    @Published var discoveredDevices: [CBPeripheral] = []
+    @Published var connectedDeviceName: String?
+    
+    private var centralManager: CBCentralManager!
+    private var connectedPeripheral: CBPeripheral?
+    private var readingsCharacteristic: CBCharacteristic?
+    
+    override init() {
+        super.init()
+        centralManager = CBCentralManager(delegate: self, queue: nil, options: [
+            CBCentralManagerOptionRestoreIdentifierKey: "com.aerosense.bluetooth"
+        ])
+    }
+    
+    func startScanning() {
+        guard centralManager.state == .poweredOn else { return }
+        connectionState = .scanning
+        discoveredDevices = []
+        
+        // Scan for Aranet4 and other supported devices
+        centralManager.scanForPeripherals(
+            withServices: [Aranet4Protocol.aranetService],
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
+        
+        // Stop scanning after 30 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            if self?.connectionState == .scanning {
+                self?.centralManager.stopScan()
+                self?.connectionState = .disconnected
+            }
+        }
+    }
+    
+    func connect(to peripheral: CBPeripheral) {
+        centralManager.stopScan()
+        connectionState = .connecting
+        connectedPeripheral = peripheral
+        peripheral.delegate = self
+        centralManager.connect(peripheral, options: nil)
+    }
+    
+    func disconnect() {
+        if let peripheral = connectedPeripheral {
+            centralManager.cancelPeripheralConnection(peripheral)
+        }
+        connectedPeripheral = nil
+        connectedDeviceName = nil
+        connectionState = .disconnected
+    }
+}
+
+extension BluetoothManager: CBCentralManagerDelegate {
+    
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        switch central.state {
+        case .poweredOn:
+            // Try to reconnect to last known device
+            if let identifier = UserDefaults.standard.string(forKey: "lastDeviceUUID"),
+               let uuid = UUID(uuidString: identifier) {
+                let peripherals = central.retrievePeripherals(withIdentifiers: [uuid])
+                if let peripheral = peripherals.first {
+                    connect(to: peripheral)
+                    return
+                }
+            }
+            // Otherwise start scanning
+            startScanning()
+            
+        case .poweredOff:
+            connectionState = .bluetoothOff
+        case .unauthorized:
+            connectionState = .unauthorized
+        default:
+            break
+        }
+    }
+    
+    func centralManager(_ central: CBCentralManager, 
+                        didDiscover peripheral: CBPeripheral,
+                        advertisementData: [String: Any],
+                        rssi RSSI: NSNumber) {
+        
+        // Add to discovered devices if not already present
+        if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
+            discoveredDevices.append(peripheral)
+        }
+        
+        // Try to parse readings from advertisement (passive monitoring)
+        if let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data {
+            if let reading = Aranet4Protocol.parseAdvertisement(manufacturerData) {
+                DispatchQueue.main.async {
+                    self.currentReading = reading
+                }
+            }
+        }
+    }
+    
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        connectionState = .connected
+        connectedDeviceName = peripheral.name ?? "CO2 Monitor"
+        peripheral.discoverServices([Aranet4Protocol.aranetService])
+        
+        // Save for auto-reconnect
+        UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: "lastDeviceUUID")
+    }
+    
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        connectionState = .disconnected
+        connectedDeviceName = nil
+        
+        // Attempt reconnection
+        if error != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.connect(to: peripheral)
+            }
+        }
+    }
+    
+    // State restoration for background operation
+    func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
+        if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] {
+            for peripheral in peripherals {
+                connectedPeripheral = peripheral
+                peripheral.delegate = self
+            }
+        }
+    }
+}
+
+extension BluetoothManager: CBPeripheralDelegate {
+    
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard let services = peripheral.services else { return }
+        
+        for service in services {
+            if service.uuid == Aranet4Protocol.aranetService {
+                peripheral.discoverCharacteristics(
+                    [Aranet4Protocol.currentReadingsChar],
+                    for: service
+                )
+            }
+        }
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral, 
+                    didDiscoverCharacteristicsFor service: CBService,
+                    error: Error?) {
+        guard let characteristics = service.characteristics else { return }
+        
+        for characteristic in characteristics {
+            if characteristic.uuid == Aranet4Protocol.currentReadingsChar {
+                readingsCharacteristic = characteristic
+                // Enable notifications for real-time updates
+                peripheral.setNotifyValue(true, for: characteristic)
+                // Also do initial read
+                peripheral.readValue(for: characteristic)
+            }
+        }
+    }
+    
+    func peripheral(_ peripheral: CBPeripheral,
+                    didUpdateValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        guard let data = characteristic.value else { return }
+        
+        if characteristic.uuid == Aranet4Protocol.currentReadingsChar {
+            if let reading = Aranet4Protocol.parseCurrentReadings(data) {
+                DispatchQueue.main.async {
+                    self.currentReading = reading
+                    NotificationCenter.default.post(
+                        name: .newAirQualityReading,
+                        object: reading
+                    )
+                }
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let newAirQualityReading = Notification.Name("newAirQualityReading")
+}
+```
+
+### Secondary Target: INKBIRD IAM-T1
+
+```swift
+// MARK: - INKBIRD IAM-T1 Protocol
+
+struct InkbirdProtocol {
+    
+    // INKBIRD uses a simpler BLE profile
+    static let serviceUUID = CBUUID(string: "0000fff0-0000-1000-8000-00805f9b34fb")
+    static let dataCharUUID = CBUUID(string: "0000fff4-0000-1000-8000-00805f9b34fb")
+    
+    /// Parse INKBIRD data packet
+    /// Format: [header, CO2_L, CO2_H, Temp_L, Temp_H, Hum_L, Hum_H, ...]
+    static func parseData(_ data: Data) -> AirQualityReading? {
+        guard data.count >= 7 else { return nil }
+        
+        let co2 = Int(data[1]) | (Int(data[2]) << 8)
+        let tempRaw = Int(data[3]) | (Int(data[4]) << 8)
+        let humRaw = Int(data[5]) | (Int(data[6]) << 8)
+        
+        let temperature = Double(tempRaw) / 100.0
+        let humidity = Int(Double(humRaw) / 100.0)
+        
+        return AirQualityReading(
+            co2: co2,
+            temperature: temperature,
+            humidity: humidity,
+            pressure: nil,
+            battery: nil,
+            timestamp: Date(),
+            source: .inkbird
+        )
+    }
+}
+```
+
+-----
+
+## Core Data Models
+
+```swift
+// MARK: - Models/AirQualityReading.swift
+
+import Foundation
+
+struct AirQualityReading: Identifiable, Codable {
+    let id: UUID
+    let co2: Int // ppm
+    let temperature: Double? // Celsius
+    let humidity: Int? // percentage
+    let pressure: Double? // hPa
+    let voc: Int? // ppb (if available)
+    let pm25: Double? // µg/m³ (if available)
+    let battery: Int? // percentage
+    let timestamp: Date
+    let source: DeviceType
+    var flightPhase: FlightPhase?
+    
+    init(co2: Int, temperature: Double? = nil, humidity: Int? = nil,
+         pressure: Double? = nil, voc: Int? = nil, pm25: Double? = nil,
+         battery: Int? = nil, timestamp: Date = Date(), source: DeviceType,
+         flightPhase: FlightPhase? = nil) {
+        self.id = UUID()
+        self.co2 = co2
+        self.temperature = temperature
+        self.humidity = humidity
+        self.pressure = pressure
+        self.voc = voc
+        self.pm25 = pm25
+        self.battery = battery
+        self.timestamp = timestamp
+        self.source = source
+        self.flightPhase = flightPhase
+    }
+    
+    var alertLevel: AlertLevel {
+        if co2 >= 2500 { return .critical }
+        if co2 >= 1500 { return .warning }
+        if co2 >= 800 { return .advisory }
+        return .good
+    }
+}
+
+enum DeviceType: String, Codable, CaseIterable {
+    case aranet4 = "Aranet4"
+    case inkbird = "INKBIRD"
+    case qingping = "Qingping"
+    case unknown = "Unknown"
+    
+    var icon: String {
+        switch self {
+        case .aranet4: return "📟"
+        case .inkbird: return "🐦"
+        case .qingping: return "🌿"
+        case .unknown: return "📱"
+        }
+    }
+}
+
+enum FlightPhase: String, Codable, CaseIterable {
+    case preFlight = "Pre-Flight"
+    case boarding = "Boarding"
+    case taxi = "Taxi"
+    case takeoff = "Takeoff"
+    case climb = "Climb"
+    case cruise = "Cruise"
+    case descent = "Descent"
+    case landing = "Landing"
+    case arrived = "Arrived"
+    
+    var expectedCO2Range: ClosedRange<Int> {
+        switch self {
+        case .preFlight: return 400...600
+        case .boarding: return 1800...2800
+        case .taxi: return 2500...3500
+        case .takeoff: return 2000...2800
+        case .climb: return 1400...2000
+        case .cruise: return 1250...1680
+        case .descent: return 1300...1800
+        case .landing: return 1800...2600
+        case .arrived: return 800...1200
+        }
+    }
+    
+    var canTakeAction: Bool {
+        switch self {
+        case .taxi, .takeoff, .climb, .descent:
+            return false
+        default:
+            return true
+        }
+    }
+    
+    var suppressAdvisoryAlerts: Bool {
+        switch self {
+        case .taxi, .takeoff, .climb, .descent, .landing:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .preFlight: return "🎒"
+        case .boarding: return "🚶"
+        case .taxi: return "🛬"
+        case .takeoff: return "🛫"
+        case .climb: return "📈"
+        case .cruise: return "✈️"
+        case .descent: return "📉"
+        case .landing: return "🛬"
+        case .arrived: return "🎉"
+        }
+    }
+}
+
+enum AlertLevel: String, Codable {
+    case good = "Good"
+    case advisory = "Advisory"
+    case warning = "Warning"
+    case critical = "Critical"
+    
+    var color: String {
+        switch self {
+        case .good: return "green"
+        case .advisory: return "blue"
+        case .warning: return "orange"
+        case .critical: return "red"
+        }
+    }
+}
+```
+
+```swift
+// MARK: - Models/FlightSession.swift
+
+import Foundation
+
+class FlightSession: ObservableObject, Identifiable {
+    let id: UUID
+    @Published var startTime: Date
+    @Published var endTime: Date?
+    @Published var readings: [AirQualityReading] = []
+    @Published var currentPhase: FlightPhase = .preFlight
+    @Published var hydrationLogs: [HydrationLog] = []
+    @Published var caffeineTaken: Bool = false
+    @Published var alerts: [AirQualityAlert] = []
+    
+    var isActive: Bool { endTime == nil }
+    
+    init() {
+        self.id = UUID()
+        self.startTime = Date()
+    }
+    
+    var averageCO2: Int {
+        guard !readings.isEmpty else { return 0 }
+        return readings.map(\.co2).reduce(0, +) / readings.count
+    }
+    
+    var maxCO2: Int {
+        readings.map(\.co2).max() ?? 0
+    }
+    
+    var grade: String {
+        switch averageCO2 {
+        case ..<1000: return "A"
+        case 1000..<1400: return "B"
+        case 1400..<1800: return "C"
+        case 1800..<2200: return "D"
+        default: return "F"
+        }
+    }
+    
+    var totalHydration: Int {
+        hydrationLogs.map(\.amount).reduce(0, +)
+    }
+    
+    func addReading(_ reading: AirQualityReading) {
+        var newReading = reading
+        newReading.flightPhase = currentPhase
+        readings.append(newReading)
+    }
+    
+    func logHydration(amount: Int) {
+        hydrationLogs.append(HydrationLog(amount: amount))
+    }
+    
+    func end() {
+        endTime = Date()
+    }
+}
+
+struct HydrationLog: Identifiable, Codable {
+    let id: UUID
+    let amount: Int // ml
+    let timestamp: Date
+    
+    init(amount: Int) {
+        self.id = UUID()
+        self.amount = amount
+        self.timestamp = Date()
+    }
+}
+
+struct AirQualityAlert: Identifiable, Codable {
+    let id: UUID
+    let level: AlertLevel
+    let headline: String
+    let metric: String
+    let action: String
+    let evidence: String?
+    let honestLimitation: String?
+    let timestamp: Date
+    var acknowledged: Bool = false
+    var snoozedUntil: Date?
+}
+```
+
+-----
+
+## Alert Engine with Evidence-Based Recommendations
+
+```swift
+// MARK: - Services/AlertEngine.swift
+
+import Foundation
+import UserNotifications
+
+class AlertEngine: ObservableObject {
+    
+    @Published var activeAlerts: [AirQualityAlert] = []
+    
+    private var snoozedLevels: [AlertLevel: Date] = [:]
+    private var lastAlertTime: [AlertLevel: Date] = [:]
+    private let alertCooldown: TimeInterval = 300 // 5 minutes
+    
+    func processReading(_ reading: AirQualityReading, phase: FlightPhase) {
+        var newAlerts: [AirQualityAlert] = []
+        
+        // CO2 Critical
+        if reading.co2 >= 2500 && shouldAlert(level: .critical) {
+            newAlerts.append(AirQualityAlert(
+                id: UUID(),
+                level: .critical,
+                headline: "High CO₂ Detected",
+                metric: "\(reading.co2) ppm — healthy is below 800",
+                action: phase.canTakeAction
+                    ? "Open overhead vent fully and direct airflow toward your face. Take slow, deep breaths. Drink 200ml water."
+                    : "Prepare to open vent when seatbelt sign turns off. Levels typically improve after takeoff.",
+                evidence: "Harvard study: pilots are 69% less likely to pass flight maneuvers at 2,500 ppm",
+                honestLimitation: "Gaspers provide only ~5% of your breathing zone air. You cannot significantly change cabin ventilation.",
+                timestamp: Date()
+            ))
+        }
+        
+        // CO2 Warning
+        else if reading.co2 >= 1500 && shouldAlert(level: .warning) && !phase.suppressAdvisoryAlerts {
+            newAlerts.append(AirQualityAlert(
+                id: UUID(),
+                level: .warning,
+                headline: "Elevated CO₂",
+                metric: "\(reading.co2) ppm — target is below 1,500",
+                action: "Ensure overhead vent is open. Consider 100mg caffeine if you haven't had any—increases ventilatory response 28%.",
+                evidence: "2025 US Army study: prophylactic caffeine mitigates hypercapnia symptoms",
+                honestLimitation: nil,
+                timestamp: Date()
+            ))
+        }
+        
+        // VOC Critical (if sensor supports)
+        if let voc = reading.voc, voc >= 300 && shouldAlert(level: .critical) {
+            newAlerts.append(AirQualityAlert(
+                id: UUID(),
+                level: .critical,
+                headline: "Elevated VOCs — Possible Fume Event",
+                metric: "\(voc) ppb volatile organic compounds",
+                action: "If you smell oil or feel burning eyes/throat, alert flight crew immediately.",
+                evidence: "LA Times investigation: fume events sicken hundreds of passengers annually",
+                honestLimitation: "Masks cannot filter CO₂—it's a gas. For VOCs, consumer masks provide limited protection.",
+                timestamp: Date()
+            ))
+        }
+        
+        for alert in newAlerts {
+            activeAlerts.append(alert)
+            lastAlertTime[alert.level] = Date()
+            sendNotification(for: alert)
+        }
+    }
+    
+    private func shouldAlert(level: AlertLevel) -> Bool {
+        if let snoozedUntil = snoozedLevels[level], Date() < snoozedUntil {
+            return false
+        }
+        if let lastAlert = lastAlertTime[level],
+           Date().timeIntervalSince(lastAlert) < alertCooldown {
+            return false
+        }
+        if activeAlerts.contains(where: { $0.level == level && !$0.acknowledged }) {
+            return false
+        }
+        return true
+    }
+    
+    func acknowledge(alert: AirQualityAlert) {
+        if let index = activeAlerts.firstIndex(where: { $0.id == alert.id }) {
+            activeAlerts[index].acknowledged = true
+        }
+    }
+    
+    func snooze(level: AlertLevel, duration: TimeInterval = 900) {
+        snoozedLevels[level] = Date().addingTimeInterval(duration)
+        activeAlerts.removeAll { $0.level == level }
+    }
+    
+    private func sendNotification(for alert: AirQualityAlert) {
+        let content = UNMutableNotificationContent()
+        content.title = alert.headline
+        content.body = alert.metric
+        content.sound = alert.level == .critical ? .defaultCritical : .default
+        
+        if alert.level == .critical {
+            content.interruptionLevel = .critical
+        }
+        
+        let request = UNNotificationRequest(
+            identifier: alert.id.uuidString,
+            content: content,
+            trigger: nil
+        )
+        
+        UNUserNotificationCenter.current().add(request)
+    }
+}
+```
+
+-----
+
+## Main App Entry Point
+
+```swift
+// MARK: - App/AeroSenseApp.swift
+
+import SwiftUI
+
+@main
+struct AeroSenseApp: App {
+    @StateObject private var bluetoothManager = BluetoothManager()
+    @StateObject private var alertEngine = AlertEngine()
+    @StateObject private var session = FlightSession()
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(bluetoothManager)
+                .environmentObject(alertEngine)
+                .environmentObject(session)
+                .onReceive(NotificationCenter.default.publisher(for: .newAirQualityReading)) { notification in
+                    if let reading = notification.object as? AirQualityReading {
+                        session.addReading(reading)
+                        alertEngine.processReading(reading, phase: session.currentPhase)
+                    }
+                }
+        }
+    }
+}
+```
+
+```swift
+// MARK: - App/ContentView.swift
+
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject var bluetoothManager: BluetoothManager
+    @EnvironmentObject var session: FlightSession
+    
+    enum AppScreen {
+        case onboarding
+        case preFlight
+        case monitoring
+        case summary
+    }
+    
+    @State private var currentScreen: AppScreen = .onboarding
+    
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch currentScreen {
+                case .onboarding:
+                    DeviceScanView(onConnected: {
+                        currentScreen = .preFlight
+                    })
+                    
+                case .preFlight:
+                    PreFlightChecklistView(onComplete: {
+                        currentScreen = .monitoring
+                    })
+                    
+                case .monitoring:
+                    DashboardView(onEndFlight: {
+                        session.end()
+                        currentScreen = .summary
+                    })
+                    
+                case .summary:
+                    FlightSummaryView(onNewFlight: {
+                        currentScreen = .preFlight
+                    })
+                }
+            }
+            .navigationTitle("AeroSense")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+```
+
+-----
+
+## Device Scanning View
+
+```swift
+// MARK: - Views/Onboarding/DeviceScanView.swift
+
+import SwiftUI
+
+struct DeviceScanView: View {
+    @EnvironmentObject var bluetoothManager: BluetoothManager
+    let onConnected: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            
+            // Icon
+            Text("📟")
+                .font(.system(size: 80))
+            
+            Text("Connect Your CO₂ Monitor")
+                .font(.title2.bold())
+            
+            Text("AeroSense works with Aranet4, INKBIRD, and other Bluetooth CO₂ monitors.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            // Status
+            Group {
+                switch bluetoothManager.connectionState {
+                case .bluetoothOff:
+                    Label("Turn on Bluetooth in Settings", systemImage: "bluetooth.slash")
+                        .foregroundColor(.red)
+                        
+                case .unauthorized:
+                    Label("Bluetooth permission required", systemImage: "lock.fill")
+                        .foregroundColor(.orange)
+                        
+                case .scanning:
+                    HStack {
+                        ProgressView()
+                        Text("Scanning for devices...")
+                    }
+                    
+                case .connecting:
+                    HStack {
+                        ProgressView()
+                        Text("Connecting...")
+                    }
+                    
+                case .connected:
+                    Label("Connected to \(bluetoothManager.connectedDeviceName ?? "device")", systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        
+                case .disconnected:
+                    Text("No device connected")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            
+            // Discovered devices
+            if !bluetoothManager.discoveredDevices.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Available Devices")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    
+                    ForEach(bluetoothManager.discoveredDevices, id: \.identifier) { peripheral in
+                        Button(action: {
+                            bluetoothManager.connect(to: peripheral)
+                        }) {
+                            HStack {
+                                Text(peripheral.name ?? "Unknown Device")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+            }
+            
+            Spacer()
+            
+            // Actions
+            if bluetoothManager.connectionState == .connected {
+                Button(action: onConnected) {
+                    Text("Continue")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(12)
+                }
+                .padding(.horizontal)
+            } else if bluetoothManager.connectionState == .disconnected {
+                Button(action: {
+                    bluetoothManager.startScanning()
+                }) {
+                    Text("Scan for Devices")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(12)
+                }
+                .padding(.horizontal)
+            }
+            
+            // Skip for demo
+            Button("Continue without device (demo mode)") {
+                onConnected()
+            }
+            .font(.subheadline)
+            .foregroundColor(.secondary)
+            .padding(.bottom)
+        }
+    }
+}
+```
+
+-----
+
+## Info.plist Configuration
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>AeroSense needs Bluetooth to connect to your CO2 monitor and track air quality during your flight.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>AeroSense needs Bluetooth to connect to your CO2 monitor.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+        <string>processing</string>
+    </array>
+    <key>CFBundleDisplayName</key>
+    <string>AeroSense</string>
+</dict>
+</plist>
+```
+
+-----
+
+## Development Checklist
+
+### Week 1-2: Core BLE Infrastructure
+
+- [ ] Set up Xcode project with SwiftUI
+- [ ] Implement BluetoothManager with CoreBluetooth
+- [ ] Add Aranet4 protocol parsing
+- [ ] Test device scanning and connection
+- [ ] Implement background BLE restoration
+
+### Week 3-4: Data Models & Persistence
+
+- [ ] Create data models
+- [ ] Implement FlightSession management
+- [ ] Add local storage (SwiftData)
+- [ ] Build reading history
+
+### Week 5-6: UI Implementation
+
+- [ ] Device scanning/pairing view
+- [ ] Pre-flight checklist
+- [ ] Main dashboard with gauges
+- [ ] Alert cards
+- [ ] Flight summary
+
+### Week 7-8: Alert System
+
+- [ ] AlertEngine logic
+- [ ] Push notifications
+- [ ] Apply for Critical Alerts entitlement
+- [ ] Test alert flow
+
+### Week 9-10: Polish & Testing
+
+- [ ] Onboarding flow
+- [ ] Settings screen
+- [ ] Real device testing
+- [ ] TestFlight beta
+
+### Week 11-12: Launch
+
+- [ ] App Store assets
+- [ ] Privacy policy
+- [ ] Submit for review
+
+-----
+
+## Testing Without Hardware
+
+```swift
+// MARK: - MockBluetoothManager for Development
+
+class MockBluetoothManager: BluetoothManager {
+    
+    private var timer: Timer?
+    private var phaseIndex = 0
+    private let phases: [(FlightPhase, ClosedRange<Int>)] = [
+        (.boarding, 1800...2800),
+        (.taxi, 2500...3500),
+        (.cruise, 1250...1680),
+        (.descent, 1300...1800)
+    ]
+    
+    override func startScanning() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            self.connectionState = .connected
+            self.connectedDeviceName = "Mock Aranet4"
+            self.startMockReadings()
+        }
+    }
+    
+    private func startMockReadings() {
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let (phase, range) = self.phases[self.phaseIndex % self.phases.count]
+            
+            self.currentReading = AirQualityReading(
+                co2: Int.random(in: range),
+                temperature: Double.random(in: 21...25),
+                humidity: Int.random(in: 20...40),
+                battery: 85,
+                timestamp: Date(),
+                source: .aranet4,
+                flightPhase: phase
+            )
+            
+            if Int.random(in: 0...10) == 0 {
+                self.phaseIndex += 1
+            }
+        }
+    }
+}
+```
+
+-----
+
+**This specification provides everything needed to build AeroSense as a native iOS app connecting to real Bluetooth CO₂ monitors. The app-only approach enables 8-12 week launch with ~$30-50K development cost.**
