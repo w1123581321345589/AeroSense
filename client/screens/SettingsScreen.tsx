@@ -9,6 +9,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Feather } from "@expo/vector-icons";
 
 import { ThemedText } from "@/components/ThemedText";
@@ -17,6 +19,7 @@ import { Card } from "@/components/Card";
 import { useTheme } from "@/hooks/useTheme";
 import { useApp } from "@/lib/context";
 import { Colors, Spacing, Typography, BorderRadius } from "@/constants/theme";
+import type { RootStackParamList } from "@/navigation/RootStackNavigator";
 
 type AvatarType = "pilot" | "attendant" | "passenger";
 
@@ -31,6 +34,7 @@ export default function SettingsScreen() {
   const tabBarHeight = useBottomTabBarHeight();
   const { theme, isDark } = useTheme();
   const { settings, updateSettings, disconnectDevice } = useApp();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const [editingName, setEditingName] = React.useState(false);
   const [tempName, setTempName] = React.useState(settings.displayName);
@@ -278,6 +282,50 @@ export default function SettingsScreen() {
             </View>
           </View>
         </Card>
+
+        <ThemedText style={[styles.groupTitle, { color: theme.textSecondary }]}>
+          Analytics
+        </ThemedText>
+
+        <Pressable
+          onPress={() => navigation.navigate("AirlineRankings")}
+          style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}
+        >
+          <Card style={styles.linkCard}>
+            <View style={styles.linkContent}>
+              <View style={[styles.linkIcon, { backgroundColor: isDark ? Colors.dark.primary + "20" : Colors.light.primary + "20" }]}>
+                <Feather name="bar-chart-2" size={20} color={isDark ? Colors.dark.primary : Colors.light.primary} />
+              </View>
+              <View style={styles.linkInfo}>
+                <ThemedText style={styles.linkTitle}>Airline Rankings</ThemedText>
+                <ThemedText style={[styles.linkDescription, { color: theme.textSecondary }]}>
+                  Compare air quality across airlines
+                </ThemedText>
+              </View>
+              <Feather name="chevron-right" size={20} color={theme.textSecondary} />
+            </View>
+          </Card>
+        </Pressable>
+
+        <Pressable
+          onPress={() => navigation.navigate("Tutorial")}
+          style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}
+        >
+          <Card style={styles.linkCard}>
+            <View style={styles.linkContent}>
+              <View style={[styles.linkIcon, { backgroundColor: isDark ? Colors.dark.primary + "20" : Colors.light.primary + "20" }]}>
+                <Feather name="help-circle" size={20} color={isDark ? Colors.dark.primary : Colors.light.primary} />
+              </View>
+              <View style={styles.linkInfo}>
+                <ThemedText style={styles.linkTitle}>Tutorial</ThemedText>
+                <ThemedText style={[styles.linkDescription, { color: theme.textSecondary }]}>
+                  Learn how to use AeroSense
+                </ThemedText>
+              </View>
+              <Feather name="chevron-right" size={20} color={theme.textSecondary} />
+            </View>
+          </Card>
+        </Pressable>
 
         <ThemedText style={[styles.groupTitle, { color: theme.textSecondary }]}>
           Premium
@@ -553,5 +601,32 @@ const styles = StyleSheet.create({
     ...Typography.caption,
     textAlign: "center",
     marginBottom: Spacing.xl,
+  },
+  linkCard: {
+    padding: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  linkContent: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  linkIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: Spacing.md,
+  },
+  linkInfo: {
+    flex: 1,
+  },
+  linkTitle: {
+    ...Typography.body,
+    fontWeight: "600",
+  },
+  linkDescription: {
+    ...Typography.caption,
+    marginTop: 2,
   },
 });
