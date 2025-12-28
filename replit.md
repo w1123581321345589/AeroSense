@@ -1,4 +1,4 @@
-# AeroSense - Replit Agent Guidelines
+# AeroSense - Development Guidelines
 
 ## Overview
 
@@ -53,7 +53,7 @@ Preferred communication style: Simple, everyday language.
 ### Build System
 
 **Development:**
-- Expo development server with custom proxy configuration for Replit
+- Expo development server with custom proxy configuration
 - Separate processes for Expo (`expo:dev`) and Express server (`server:dev`)
 
 **Production:**
@@ -100,7 +100,7 @@ Preferred communication style: Simple, everyday language.
 - Repository: https://github.com/w1123581321345589/AeroSense
 - Sync endpoint: POST `/api/github/sync-files` with `{repoName, commitMessage}`
 - User endpoint: GET `/api/github/user`
-- Uses Replit's GitHub connector for authentication
+- Uses OAuth GitHub connector for authentication
 
 ### Planned Integrations (from specifications)
 - **CoreBluetooth/BLE:** Connection to CO2 monitors (Aranet4, INKBIRD IAM-T1, Qingping)
