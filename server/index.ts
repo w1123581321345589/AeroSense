@@ -17,12 +17,14 @@ function setupCors(app: express.Application) {
   app.use((req, res, next) => {
     const origins = new Set<string>();
 
-    if (process.env.REPLIT_DEV_DOMAIN) {
-      origins.add(`https://${process.env.REPLIT_DEV_DOMAIN}`);
+    const devDomain = process.env.REPLIT_DEV_DOMAIN;
+    if (devDomain) {
+      origins.add(`https://${devDomain}`);
     }
 
-    if (process.env.REPLIT_DOMAINS) {
-      process.env.REPLIT_DOMAINS.split(",").forEach((d) => {
+    const allowedDomains = process.env.REPLIT_DOMAINS;
+    if (allowedDomains) {
+      allowedDomains.split(",").forEach((d: string) => {
         origins.add(`https://${d.trim()}`);
       });
     }
