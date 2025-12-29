@@ -7,23 +7,23 @@ async function getAccessToken() {
     return connectionSettings.settings.access_token;
   }
   
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY 
+  const connectorsHostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const authToken = process.env.REPL_IDENTITY 
     ? 'repl ' + process.env.REPL_IDENTITY 
     : process.env.WEB_REPL_RENEWAL 
     ? 'depl ' + process.env.WEB_REPL_RENEWAL 
     : null;
 
-  if (!xReplitToken) {
-    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
+  if (!authToken) {
+    throw new Error('Authentication token not found');
   }
 
   connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=github',
+    'https://' + connectorsHostname + '/api/v2/connection?include_secrets=true&connector_names=github',
     {
       headers: {
         'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
+        'X_REPLIT_TOKEN': authToken
       }
     }
   ).then(res => res.json()).then(data => data.items?.[0]);
