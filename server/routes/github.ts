@@ -9,9 +9,10 @@ async function getAllFiles(dir: string, baseDir: string = ''): Promise<{path: st
   const files: {path: string, content: string}[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   
-  const ignoreDirs = ['node_modules', '.git', 'static-build', 'dist', 'server_dist', '.expo', '.cache'];
+  const ignoreDirs = ['node_modules', '.git', 'static-build', 'dist', 'server_dist', '.expo', '.cache', '.local', 'screenshots'];
   const ignoreFiles = ['.DS_Store', 'package-lock.json'];
-  
+  const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico'];
+
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     const relativePath = baseDir ? `${baseDir}/${entry.name}` : entry.name;
@@ -25,7 +26,9 @@ async function getAllFiles(dir: string, baseDir: string = ''): Promise<{path: st
       if (!ignoreFiles.includes(entry.name)) {
         try {
           const content = fs.readFileSync(fullPath);
-          const isBinary = content.includes(0x00);
+          const ext = path.extname(entry.name).toLowerCase();
+          const isImage = imageExts.includes(ext);
+          const isBinary = !isImage && content.includes(0x00);
           if (!isBinary) {
             files.push({
               path: relativePath,
